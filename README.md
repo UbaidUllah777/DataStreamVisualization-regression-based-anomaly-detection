@@ -7,7 +7,7 @@ that nobody saw coming, because nothing watched the robot's health while it ran.
 the controller's per-joint current as a live stream, stores it in Neon PostgreSQL, shows it on a live
 dashboard, and turns the history into maintenance alerts.
 
-**Dataset.** `dataset/RMBR4-2_export_test.csv`: one robot, 39,672 readings, 17–18 Oct 2022. Supplied
+**Dataset.** `data/RMBR4-2_export_test.csv`: one robot, 39,672 readings, 17–18 Oct 2022. Supplied
 as CSCN8010 course material; it is not public, so no link or licence applies.
 
 ## Team - Group 2

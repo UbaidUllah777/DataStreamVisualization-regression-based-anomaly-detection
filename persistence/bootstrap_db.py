@@ -7,7 +7,7 @@ import numpy as np
 from acquisition.controller_feed import JOINTS, read_shift
 from persistence.telemetry_store import PROJECT_ROOT, TelemetryStore
 
-CSV_PATH = PROJECT_ROOT / "dataset" / "RMBR4-2_export_test.csv"
+CSV_PATH = PROJECT_ROOT / "data" / "RMBR4-2_export_test.csv"
 
 
 def build(store: TelemetryStore) -> None:
