@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Regression Maintenance Monitor</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #f3f5f8; color: #172434;
+    font-family: system-ui, sans-serif;
+  }
+  main { max-width: 1250px; margin: auto; padding: 28px; }
+  h1 { margin: 0 0 8px; font-size: 28px; }
+  h2 { font-size: 19px; margin: 0 0 12px; }
+  p { line-height: 1.5; }
+  .muted { color: #536478; }
+  .meta { overflow-wrap: anywhere; font-size: 13px; }
+  .cards {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 14px; margin: 22px 0;
+  }
+  .card, section {
+    background: white; border: 1px solid #dce3eb;
+    border-radius: 10px; padding: 20px;
+  }
+  .card strong { display: block; font-size: 30px; margin-top: 6px; }
+  .alert { color: #996000; }
+  .error { color: #bc2525; }
+  section { margin-top: 18px; }
+  .controls {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  select, button {
+    padding: 9px 14px; border: 1px solid #aab8c8;
+    border-radius: 6px; background: white; font: inherit;
+  }
+  button { cursor: pointer; }
+  #chart { width: 100%; height: auto; display: block; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; }
+  .observed { color: #276caa; }
+  .prediction { color: #172434; }
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td {
+    text-align: left; padding: 11px 8px;
+    border-bottom: 1px solid #e4e9ef; white-space: nowrap;
+  }
+  th { background: #f6f8fb; }
+  #thresholds { font-size: 14px; }
+  @media (max-width: 650px) {
+    main { padding: 14px; }
+    .cards { grid-template-columns: repeat(2, 1fr); }
+  }
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 10mm;
+  }
+
+  body { background: white; }
+  main { max-width: none; padding: 0; }
+  button { display: none; }
+
+  .table-scroll { overflow: visible; }
+
+  table {
+    table-layout: fixed;
+    width: 100%;
+    font-size: 9px;
+  }
+
+  th, td {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    padding: 6px 4px;
+  }
+
+  section, .cards {
+    break-inside: avoid;
+  }
+
+  #chart {
+    max-height: 95mm;
+  }
+}
+
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>RMBR4-2 Regression Maintenance Monitor</h1>
+    <p class="muted">
+      Completed-run review · Synthetic predictive-maintenance demonstration
+    </p>
+    <p class="meta">
+      Run: {{ payload.run_id }}<br>
+      Measurements verified against Neon:
+      {{ payload.database_verified_at }}
+    </p>
+  </header>
+
+  <div class="cards">
+    <div class="card">Persisted samples<strong>{{ payload.counts.samples }}</strong></div>
+    <div class="card">Axis measurements<strong>{{ payload.counts.axis_measurements }}</strong></div>
+    <div class="card alert">Alert records<strong>{{ payload.counts.Alert }}</strong></div>
+    <div class="card error">Error records<strong>{{ payload.counts.Error }}</strong></div>
+  </div>
+
+  <section>
+    <div class="controls">
+      <h2>Measurements and regression</h2>
+      <label for="axis">Axis</label>
+      <select id="axis">
+        {% for item in payload.configuration %}
+        <option value="{{ item.axis }}">Axis #{{ item.axis[1:] }}</option>
+        {% endfor %}
+      </select>
+      <button id="refresh" type="button">Refresh and verify</button>
+    </div>
+
+    <p id="thresholds"></p>
+
+    <div class="legend">
+      <span class="observed">● Observed</span>
+      <span class="prediction">— Regression prediction</span>
+      <span class="alert">○ Alert trigger</span>
+      <span class="error">▲ Error trigger</span>
+    </div>
+
+    <svg id="chart" viewBox="0 0 1100 460"
+         role="img" aria-label="Selected-axis regression and event chart"></svg>
+
+    <p class="muted">
+      Measurement values and deviations use original units.
+      Markers show trigger times; labels show final exceedance durations.
+      Shaded bands show observed exceedance intervals.
+    </p>
+  </section>
+
+  <section>
+    <h2 id="event-title">Selected-axis events</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Severity</th><th>Start (UTC)</th><th>Triggered (UTC)</th>
+            <th>End (UTC)</th><th>Duration</th><th>Peak residual</th>
+            <th>Status</th><th>Closure</th>
+          </tr>
+        </thead>
+        <tbody id="events"></tbody>
+      </table>
+    </div>
+    <p class="muted">
+      Summary cards count all axes. This table follows the selected axis.
+      Alert and Error records can overlap and are not separate physical faults.
+    </p>
+  </section>
+
+  <p class="muted">
+    This review shows a completed recorded run, not current machine health.
+    The evaluated detector missed smaller sustained synthetic increases.
+    Measurement-unit clarification remains pending.
+  </p>
+</main>
+
+<script>
+const data = {{ payload | tojson }};
+const svg = document.getElementById("chart");
+const NS = "http://www.w3.org/2000/svg";
+const axisControl = document.getElementById("axis");
+
+function element(tag, attributes, text) {
+  const node = document.createElementNS(NS, tag);
+  for (const [name, value] of Object.entries(attributes)) {
+    node.setAttribute(name, value);
+  }
+  if (text !== undefined) node.textContent = text;
+  svg.appendChild(node);
+  return node;
+}
+
+function utc(value) {
+  return new Date(value).toISOString().replace("T", " ").replace("Z", "");
+}
+
+function render() {
+  const axis = axisControl.value;
+  const rows = data.predictions
+    .filter(row => row.axis === axis)
+    .sort((a, b) => Date.parse(a.sampled_at) - Date.parse(b.sampled_at));
+  const events = data.events.filter(event => event.axis === axis);
+  const config = data.configuration.find(row => row.axis === axis);
+
+  document.getElementById("thresholds").textContent =
+    `MinC: ${config.MinC.toFixed(6)} · MaxC: ${config.MaxC.toFixed(6)} · ` +
+    `T: ${config.T_seconds}s · Maximum observation gap: ${config.max_gap_seconds.toFixed(3)}s`;
+
+  svg.replaceChildren();
+  const first = Date.parse(rows[0].sampled_at);
+  const last = Date.parse(rows[rows.length - 1].sampled_at);
+  const values = rows.flatMap(row => [row.observed, row.predicted]);
+  const minimum = Math.min(0, ...values);
+  const maximum = Math.max(...values);
+  const span = Math.max(maximum - minimum, 0.001);
+  const low = minimum - span * 0.08;
+  const high = maximum + span * 0.28;
+  const left = 75, right = 1050, top = 45, bottom = 385;
+  const x = value => left + (Date.parse(value) - first) / (last - first) * (right - left);
+  const y = value => bottom - (value - low) / (high - low) * (bottom - top);
+
+  for (let i = 0; i <= 5; i++) {
+    const value = low + (high - low) * i / 5;
+    element("line", {
+      x1: left, x2: right, y1: y(value), y2: y(value),
+      stroke: "#e3e9f0"
+    });
+    element("text", {
+      x: left - 10, y: y(value) + 4,
+      "text-anchor": "end", "font-size": 12, fill: "#536478"
+    }, value.toFixed(2));
+
+    const time = first + (last - first) * i / 5;
+    const position = left + (right - left) * i / 5;
+    element("text", {
+      x: position, y: bottom + 24,
+      "text-anchor": "middle", "font-size": 12
+    }, ((time - first) / 60000).toFixed(1));
+  }
+
+  element("text", {
+    x: 550, y: 445, "text-anchor": "middle", "font-size": 13
+  }, "Minutes since first streamed measurement");
+  element("text", {
+    x: left, y: 22, "font-size": 13
+  }, `Axis #${axis.slice(1)} — original measurement units`);
+
+  for (const event of events) {
+    const color = event.severity === "Alert" ? "#ad7100" : "#c62828";
+    element("rect", {
+      x: x(event.start), y: top,
+      width: Math.max(1, x(event.end) - x(event.start)),
+      height: bottom - top, fill: color, opacity: 0.08
+    });
+  }
+
+  for (const row of rows) {
+    element("circle", {
+      cx: x(row.sampled_at), cy: y(row.observed),
+      r: 2.5, fill: "#276caa", opacity: 0.6
+    });
+  }
+
+  element("polyline", {
+    points: rows.map(row => `${x(row.sampled_at)},${y(row.predicted)}`).join(" "),
+    fill: "none", stroke: "#172434", "stroke-width": 2
+  });
+
+  for (const event of events) {
+    const row = rows.find(item =>
+      Date.parse(item.sampled_at) === Date.parse(event.triggered_at));
+    if (!row) continue;
+
+    const px = x(event.triggered_at), py = y(row.observed);
+    const alert = event.severity === "Alert";
+    const color = alert ? "#ad7100" : "#c62828";
+
+    if (alert) {
+      element("circle", {
+        cx: px, cy: py, r: 8, fill: "none",
+        stroke: color, "stroke-width": 2
+      });
+    } else {
+      element("polygon", {
+        points: `${px},${py-6} ${px-6},${py+5} ${px+6},${py+5}`,
+        fill: color
+      });
+    }
+
+    const labelY = py + (alert ? -28 : 35);
+    const labelX = px + (alert ? -12 : 12);
+    element("line", {
+      x1: px, y1: py, x2: labelX, y2: labelY,
+      stroke: color
+    });
+    element("text", {
+      x: labelX, y: labelY,
+      "text-anchor": alert ? "end" : "start",
+      "font-size": 12, fill: color
+    }, `${event.severity}: ${event.duration_seconds.toFixed(0)}s`);
+  }
+
+  const body = document.getElementById("events");
+  body.replaceChildren();
+  document.getElementById("event-title").textContent =
+    `Axis #${axis.slice(1)} events (${events.length})`;
+
+  for (const event of events) {
+    const tr = document.createElement("tr");
+    const values = [
+      event.severity, utc(event.start), utc(event.triggered_at),
+      utc(event.end), `${event.duration_seconds}s`,
+      event.peak_residual.toFixed(6), event.status, event.close_reason
+    ];
+    values.forEach((value, index) => {
+      const td = document.createElement("td");
+      td.textContent = value;
+      if (index === 0) td.className = event.severity.toLowerCase();
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  }
+}
+
+axisControl.addEventListener("change", render);
+document.getElementById("refresh").addEventListener("click", () => location.reload());
+render();
+</script>
+</body>
+</html>
